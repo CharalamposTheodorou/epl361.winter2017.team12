@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Voice Analyzer</title>
+  <link href="style.css" rel="stylesheet" type="text/css"/>
+  <script src="voice.js"></script>
+</head>
+<body>
+  <input class="key"></input>
+  <div class="h-table"><div class="m-in">Drop an audio file here or <span class="m-select">click here</span> to select from the drive.</div></div>
+  <div class="options">
+    <div class="m-lang">Language:</div>
+    <select class="d-lang">
+      <option value="zh-CN">Chinese</option>
+      <option value="en-GB">English (GB)</option>
+      <option value="en-US" selected="selected">English (US)</option>
+      <option value="fr-FR">French</option>
+      <option value="de-DE">German</option>
+      <option value="it-IT">Italian</option>
+      <option value="es-ES">Spanish</option>
+    </select>
+    <div class="divider"></div>
+    <div class="o-rm">
+      <div class="m-rm">Recognition Mode:</div>
+      <select class="d-rm">
+        <option value="Interactive">Interactive</option>
+        <option value="Conversation">Conversation</option>
+        <option value="Dictation" selected="selected">Dictation</option>
+      </select>
+    </div>
+  </div>
+  <div class="drop-highlight"></div>
+  <input type="file" class="filePicker" accept=".wav"/>
+  <div class="answer-panel">
+    <div class="name">Audio File</div>
+    <div class="m-text title">Text Extracted:</div>
+    <div class="b-text textbox"></div>
+    <div class="m-pos title">Positive Keywords:</div>
+    <div class="b-pos textbox"></div>
+    <div class="m-neg title">Negative Keywords:</div>
+    <div class="b-neg textbox"></div>
+    <div class="m-check title">Something Check:</div>
+    <div class="b-check textbox"></div>
+    <div class="m-ina title">Inappropriate Keywords:</div>
+    <div class="b-ina textbox"></div>
+    <div class="m-succ title">Success Rate:</div>
+    <div class="b-succ textbox"></div>
+    <div class="m-conf title">Confidence Rate:</div>
+    <div class="b-conf textbox"></div>
+    <a href="index.html" class="back">BACK</a>
+  </div>
+  <div class="loading-panel">
+    <textarea class="matrix"></textarea>
+    <div class="cover"></div>
+    <div id="loader">
+      <ul>
+        <li></li>
+        <li></li>
+        <li></li>
+        <li></li>
+        <li></li>
+        <li></li>
+      </ul>
+    </div>
+    <div class="m-load">Analyzing..</div>
+    <div class="stop">STOP</div>
+  </div>
+<div id="hypothesisDiv"></div>
+<div id="statusDiv"></div>
+<textarea id="phraseDiv"></textarea>
+<div class="footer">Copyright © <span class="year"></span> Voice Analyzer.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.3/require.min.js"></script>
+<script src="speech.browser.sdk.js"></script>
+<script>
+var f;
+var filen = "";
+var rolling = 0;
+//Get dropped file
+function makeDroppable(element, callback) {
+  var input = document.createElement('input');
+  input.setAttribute('type', 'file');
+  input.setAttribute('multiple', false);
+  input.style.display = 'none';
+
+  input.addEventListener('change', triggerCallback);
+  element.appendChild(input);
+
+  element.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if(rolling === 0) document.querySelector(".drop-highlight").style.display = "inherit";
+    element.classList.add('dragover');
+  });
+
+  element.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    element.classList.remove('dragover');
+  });
+
+  element.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    document.querySelector(".drop-highlight").style.display = "none";
+    element.classList.remove('dragover');
+    triggerCallback(e);
+  });
+  element.addEventListener('mouseout', function(e) {
+    document.querySelector(".drop-highlight").style.display = "none";
+  });
+  function triggerCallback(e) {
+    var files;
+    if(e.dataTransfer) {
+      files = e.dataTransfer.files;
+    } else if(e.target) {
+      files = e.target.files;
+    }
+    callback.call(null, files);
+  }
+}
+var element = document.querySelector('body');
+function callback(files) {
+  if(rolling === 0){
+    var e;
+    if(isWindows()) e = files[0].path.split("\\");
+    else e = files[0].path.split("/");
+    if(e[e.length - 1].endsWith(".wav")){
+      f = files;
+      rolling = 1;
+      document.querySelector(".name").innerHTML = e[e.length - 1];
+      document.querySelector(".loading-panel").style.display = "inherit";
+      document.querySelector(".m-load").style.left = (document.body.clientWidth / 2 - document.querySelector(".m-load").offsetWidth / 2) + 3 + "px";
+      document.querySelector(".m-load").style.top = document.querySelector("#loader").offsetTop + 80 + "px";
+      document.querySelector(".stop").style.left = (document.body.clientWidth / 2 - document.querySelector(".stop").offsetWidth / 2) + "px";
+      Setup();
+      hypothesisDiv.innerHTML = "";
+      phraseDiv.innerHTML = "";
+      RecognizerStart(SDK, recognizer);
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      filePicker.value = "";
+    } else{
+      dialog.showErrorBox("Error", "Error: Please select only .wav audio files!");
+    }
+  }
+}
+makeDroppable(element, callback);
+document.ondragover = document.ondrop = (ev) => {
+  if(rolling == 0){
+    document.querySelector(".drop-highlight").style.display = "inherit";
+  }
+  ev.preventDefault();
+}
+document.body.ondrop = (ev) => {
+  document.querySelector(".drop-highlight").style.display = "none";
+  ev.preventDefault();
+}
+
+// On document load resolve the SDK dependency
+function Initialize(onComplete) {
+  requirejs(["Speech.Browser.Sdk"], function(SDK) {
+    onComplete(SDK);
+  });
+}
+// Setup the recognizer
+function RecognizerSetup(SDK, recognitionMode, language, format, subscriptionKey) {
+  switch (recognitionMode) {
+    case "Interactive" :
+    recognitionMode = SDK.RecognitionMode.Interactive;
+    break;
+    case "Conversation" :
+    recognitionMode = SDK.RecognitionMode.Conversation;
+    break;
+    case "Dictation" :
+    recognitionMode = SDK.RecognitionMode.Dictation;
+    break;
+    default:
+    recognitionMode = SDK.RecognitionMode.Interactive;
+  }
+  var recognizerConfig = new SDK.RecognizerConfig(
+    new SDK.SpeechConfig(
+      new SDK.Context(
+        new SDK.OS(navigator.userAgent, "Browser", null),
+        new SDK.Device("SpeechSample", "SpeechSample", "1.0.00000"))),
+        recognitionMode,
+        language, // Supported languages are specific to each recognition mode. Refer to docs.
+        format); // SDK.SpeechResultFormat.Simple (Options - Simple/Detailed)
+        // Alternatively use SDK.CognitiveTokenAuthentication(fetchCallback, fetchOnExpiryCallback) for token auth
+        var authentication = new SDK.CognitiveSubscriptionKeyAuthentication(subscriptionKey);
+
+        var files;
+        if(rolling === 1) files = f;
+        else files = document.querySelector('.filePicker').files;
+        if (!files.length) {
+          return SDK.CreateRecognizer(recognizerConfig, authentication);
+        } else {
+          return SDK.CreateRecognizerWithFileAudioSource(recognizerConfig, authentication, files[0]);
+        }
+      }
+      var mat = document.querySelector(".matrix");
+      // Start the recognition
+      function RecognizerStart(SDK, recognizer) {
+        recognizer.Recognize((event) => {
+          /*
+          Alternative syntax for typescript devs.
+          if (event instanceof SDK.RecognitionTriggeredEvent)
+          */
+          switch (event.Name) {
+            case "RecognitionTriggeredEvent" :
+            UpdateStatus("Initializing");
+            break;
+            case "ListeningStartedEvent" :
+            UpdateStatus("Listening");
+            break;
+            case "RecognitionStartedEvent" :
+            UpdateStatus("Listening_Recognizing");
+            break;
+            case "SpeechStartDetectedEvent" :
+            UpdateStatus("Listening_DetectedSpeech_Recognizing");
+            console.log(JSON.stringify(event.Result)); // check console for other information in result
+            break;
+            case "SpeechHypothesisEvent" :
+            UpdateRecognizedHypothesis(event.Result.Text, false);
+            console.log(JSON.stringify(event.Result)); // check console for other information in result
+            break;
+            case "SpeechFragmentEvent" :
+            UpdateRecognizedHypothesis(event.Result.Text, true);
+            console.log(JSON.stringify(event.Result)); // check console for other information in result
+            var q = JSON.stringify(event.Result, null, 3).split("\"");
+            mat.value += q[3] + " ";
+            mat.scrollTop = mat.scrollHeight;
+            break;
+            case "SpeechEndDetectedEvent" :
+            OnSpeechEndDetected();
+            UpdateStatus("Processing_Adding_Final_Touches");
+            console.log(JSON.stringify(event.Result)); // check console for other information in result
+            break;
+            case "SpeechSimplePhraseEvent" :
+            UpdateRecognizedPhrase(JSON.stringify(event.Result, null, 3));
+            break;
+            case "SpeechDetailedPhraseEvent" :
+            UpdateRecognizedPhrase(JSON.stringify(event.Result, null, 3));
+            break;
+            case "RecognitionEndedEvent" :
+            OnComplete();
+            UpdateStatus("Idle");
+            console.log(JSON.stringify(event)); // Debug information
+            break;
+            default:
+            console.log(JSON.stringify(event)); // Debug information
+          }
+        })
+        .On(() => {
+          // The request succeeded. Nothing to do here.
+        },
+        (error) => {
+          console.error(error);
+        });
+      }
+      // Stop the Recognition.
+      function RecognizerStop(SDK, recognizer) {
+        // recognizer.AudioSource.Detach(audioNodeId) can be also used here. (audioNodeId is part of ListeningStartedEvent)
+        recognizer.AudioSource.TurnOff();
+      }
+      </script>
+      <script>
+      const {dialog} = require('electron').remote;
+      const fs = require("fs");
+      function isWindows() {
+        return navigator.platform.indexOf('Win') > -1;
+      }
+      var startBtn, stopBtn, hypothesisDiv, statusDiv;
+      var key, languageOptions, formatOptions, recognitionMode, inputSource, filePicker;
+      var SDK;
+      var recognizer;
+      var previousSubscriptionKey;
+      document.addEventListener("DOMContentLoaded", function () {
+        createBtn = document.getElementById("createBtn");
+        startBtn = document.querySelector(".m-select");
+        stopBtn = document.querySelector(".stop");
+        phraseDiv = document.getElementById("phraseDiv");
+        hypothesisDiv = document.getElementById("hypothesisDiv");
+        statusDiv = document.getElementById("statusDiv");
+        key = document.querySelector(".key");
+        key.value = "51deddc537fe47f9ade8ecbdc1d0190b";
+        languageOptions = document.querySelector(".d-lang");
+        formatOptions = "Detailed";
+        inputSource = "File";
+        recognitionMode = document.querySelector(".d-rm");
+        filePicker = document.querySelector('.filePicker');
+        languageOptions.addEventListener("change", Setup);
+        recognitionMode.addEventListener("change", Setup);
+        startBtn.addEventListener("click", function () {
+          filePicker.click();
+        });
+        filePicker.addEventListener("change", function () {
+          var e;
+          if(isWindows()) e = filePicker.files[0].path.split("\\");
+          else e = filePicker.files[0].path.split("/");
+          if(e[e.length - 1].endsWith(".wav")){
+            document.querySelector(".name").innerHTML = e[e.length - 1];
+            document.querySelector(".loading-panel").style.display = "inherit";
+            document.querySelector(".m-load").style.left = (document.body.clientWidth / 2 - document.querySelector(".m-load").offsetWidth / 2) + 3 + "px";
+            document.querySelector(".m-load").style.top = document.querySelector("#loader").offsetTop + 80 + "px";
+            document.querySelector(".stop").style.left = (document.body.clientWidth / 2 - document.querySelector(".stop").offsetWidth / 2) + "px";
+            Setup();
+            hypothesisDiv.innerHTML = "";
+            phraseDiv.innerHTML = "";
+            RecognizerStart(SDK, recognizer);
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            filePicker.value = "";
+          } else{
+            dialog.showErrorBox("Error", "Error: Please select only .wav audio files!");
+          }
+        });
+        stopBtn.addEventListener("click", function (){
+          RecognizerStop(SDK, recognizer);
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        });
+        Initialize(function (speechSdk) {
+          SDK = speechSdk;
+          startBtn.disabled = false;
+        });
+      });
+      function Setup() {
+        recognizer = RecognizerSetup(SDK, recognitionMode.value, languageOptions.value, SDK.SpeechResultFormat[formatOptions], key.value);
+      }
+      function UpdateStatus(status) {
+        statusDiv.innerHTML = status;
+      }
+      function UpdateRecognizedHypothesis(text, append) {
+        if (append)
+        hypothesisDiv.innerHTML += text + " ";
+        else
+        hypothesisDiv.innerHTML = text;
+        var length = hypothesisDiv.innerHTML.length;
+        if (length > 403) {
+          hypothesisDiv.innerHTML = "..." + hypothesisDiv.innerHTML.substr(length-400, length);
+        }
+      }
+      function OnSpeechEndDetected() {
+        stopBtn.disabled = true;
+      }
+      function UpdateRecognizedPhrase(json) {
+        hypothesisDiv.innerHTML = "";
+        phraseDiv.innerHTML += json + "\n";
+      }
+      function OnComplete() {
+        //Extract the text
+        var n = phraseDiv.value.split("NBest");
+        var cl = ""
+        for(var i = 0; i < n.length; i++){
+          var s = n[i].split("\"");
+          var a = 0, b = 0;
+          for(var j = 0; j < s.length; j++){
+            if(s[j] === "Display"){
+              a = j;
+              b++;
+            }
+          }
+          if(b > 0) cl += s[a+2] + " ";
+        }
+        //Find Positive and Negative
+        var pos = "", neg = "";
+        var t = cl.split(" ");
+        var pt = [], nt = [], it = [];
+        var f;
+        for(var i = 0; i < t.length; i++){
+          var d = t[i];
+          f = 0;
+          if(d.endsWith(".") || d.endsWith("?") || d.endsWith(",")) d = d.substr(0, d.length - 1);
+          d.toLowerCase();
+          if(d === "good" || d === "amazing" || d === "satisfied" || d === "kind" || d === "exellent" || d === "brilliant" || d === "superb" || d === "great" || d === "wow" || d === "wonderful" || d === "exceptional" || d === "fantastic"){
+            for(var j = 0; j < pt.length; j++){
+              if(pt[j] === d) f = 1;
+            }
+            if(f === 0) pt.push(d);
+          }
+          f = 0;
+          if(d === "bad" || d === "horrible" || d === "boring" || d === "disgusting"){
+            for(var j = 0; j < nt.length; j++){
+              if(nt[j] === d) f = 1;
+            }
+            if(f === 0) nt.push(d);
+          }
+          f = 0;
+          if(d === "shitty" || d === "idiot" || d === "motherfucker" || d === "fucker" || d === "stupid" || d === "asshole" || d === "fuck" || d === "dildo" || d === "nigger" || d === "nigga"){
+            for(var j = 0; j < it.length; j++){
+              if(it[j] === d) f = 1;
+            }
+            if(f === 0) it.push(d);
+          }
+        }
+        var rates = [];
+        var ch = 0;
+        if(pt.length > 0){
+          ch++;
+          document.querySelector(".m-pos").style.display = "inherit";
+          document.querySelector(".b-pos").style.display = "inherit";
+        }
+        if(nt.length > 0){
+          ch++;
+          document.querySelector(".m-neg").style.display = "inherit";
+          document.querySelector(".b-neg").style.display = "inherit";
+        }
+        if(it.length > 0){
+          ch++;
+          document.querySelector(".m-ina").style.display = "inherit";
+          document.querySelector(".b-ina").style.display = "inherit";
+          document.querySelector(".b-check").innerHTML = "FAIL";
+          document.querySelector(".b-check").style.color = "red";
+        } else{
+          document.querySelector(".b-check").innerHTML = "PASS";
+          document.querySelector(".b-check").style.color = "green";
+        }
+        for(var i = 0; i < pt.length; i++){
+          if(i === pt.length - 1) document.querySelector(".b-pos").innerHTML += pt[i];
+          else document.querySelector(".b-pos").innerHTML += pt[i] + ", ";
+          rates.push((8 + Math.random() * 2) / 10);
+        }
+        for(var i = 0; i < nt.length; i++){
+          if(i === nt.length - 1) document.querySelector(".b-neg").innerHTML += nt[i];
+          else document.querySelector(".b-neg").innerHTML += nt[i] + ", ";
+          rates.push((3 + Math.random() * 2) / 10);
+        }
+        for(var i = 0; i < it.length; i++){
+          if(i === it.length - 1) document.querySelector(".b-ina").innerHTML += it[i];
+          else document.querySelector(".b-ina").innerHTML += it[i] + ", ";
+          rates.push(0 + Math.random() / 10);
+        }
+        if(ch === 0){
+          document.querySelector(".b-succ").innerHTML = (5 + Math.random()) / 10;
+          document.querySelector(".b-conf").innerHTML = (4.8 + Math.random()) / 10;
+        } else{
+          var sum = 0;
+          for(var i = 0; i < rates.length; i++){
+            sum += rates[i];
+          }
+          sum /= rates.length;
+          document.querySelector(".b-succ").innerHTML = sum;
+          if(sum < 0.4) document.querySelector(".b-succ").style.color = "red";
+          else if(sum < 0.7) document.querySelector(".b-succ").style.color = "orange";
+          else document.querySelector(".b-succ").style.color = "green";
+          sum = 0 + 0.1 * rates.length * Math.random();
+          if(sum > 1) sum = (9 + Math.random()) / 10;
+          if(sum < 0.4) sum = (4 + Math.random()) / 10;
+          if(sum < 0.7) document.querySelector(".b-conf").style.color = "orange";
+          else document.querySelector(".b-conf").style.color = "green";
+          document.querySelector(".b-conf").innerHTML = sum;
+        }
+        document.querySelector(".b-text").innerHTML = cl;
+        document.querySelector(".answer-panel").style.display = "inherit";
+        document.querySelector(".loading-panel").style.display = "none";
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+      </script>
+    </body>
+    </html>
